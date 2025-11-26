@@ -1,0 +1,258 @@
+---
+title: "Multi-Scale Network Analysis of Professional League of Legends"
+subtitle: "A Hybrid Player & Team Graph Network for Win Predictions"
+authors:
+  - name: CJ Jones
+    email: cmj147@georgetown.edu
+    affiliation: Georgetown University
+format:
+  html: 
+    embed-resources: True
+    theme: mint
+    grid:
+      sidebar-width: 0px
+      body-width: 1200px
+      margin-width: 200px
+      gutter-width: 2rem
+    code-fold: true
+    code-tools: true
+    code-summary: "Show Code"
+    smooth-scroll: true
+    toc: true
+    css: styles.css
+    toc-depth: 4
+    number-sections: true
+    number-depth: 3
+execute:
+  freeze: auto
+  echo: false
+  message: false
+  warning: false
+---
+
+## Abstract
+
+Accurately forecasting the winner of a professional League of Legends (LoL) match is valuable to coaches, broadcasters, and betting markets. Prior studies analyze either player level synergy inside a single game or treat each team as an isolated time series, leaving a gap between micro and macro level factors. This project proposes a Hybrid Player-in-Game and Team-in-Game Temporal Graph Network (H-TGN) that unifies both scales within a single heterogeneous graph. This paper operates on causality preserving inflow ego subgraphs centered on each match and applies a Graph Attention Network that updates only the center team nodes while keeping relation specific messages separate. A softmax head outputs the win probability for the two teams in the focal match. The dataset covers five competitive seasons (Spring 2020 – Summer 2024) in the LCK league (Korea) and LPL league (China), totaling ~71,000 combined player- and team-level rows after preprocessing and temporal splitting. The model yields a modest but consistent above-chance signal on held-out matches while establishing a reusable, region-agnostic graph construction pipeline that links player history to team outcomes within a single end-to-end framework.
+
+
+## Introduction
+
+League of Legends is the world’s largest esport, drawing more than 6 million peak concurrent viewers to the 2024 World Championship final. A professional match is a highly organized five versus five contest in which two teams aim to destroy the opposing base which is known as the Nexus. Victory depends on a cascade of micro events lane contests, objective captures, item timings that aggregate into macro advantages such as map control and tempo. Because every major league releases detailed event and box‑score data, LoL has become a popular platform for machine learning research on teamwork, strategy, and prediction (Bisberg &  Ferrara 2022; Mora‑Cantallops & Sicilia 2019). The abundance of data and the world wide interest creates both strong research and economic opportunities for any advantages that may be pulled out of past games.
+
+### The Game – League of Legends
+
+The game of League of Legends itself is a five versus five strategy game played on a fixed map called Summoner’s Rift. Each player controls a single character (champion) for the entire match. Teams select their five champions before play begins and the specific combination of characters selected creates strengths and weaknesses that shape the early game. The primary objective is simple, destroy the enemy Nexus at the heart of the enemy's base. However, all meaningful progress flows through a resource race. Players collect waves of AI-controlled minions to earn gold and experience. Gold buys items that amplify damage and durability while experience unlocks stronger abilities. Small advantages like an extra wave of minions or a successful gank (a set play that involves players creating numbers advantages for fights over large resource deposits) compound into earlier item completions and level leads. Those edges convert into control over neutral objectives such as elemental dragons, Rift Herald, and Baron Nashor, each of which provides teamwide bonuses or siege power. With superior items, levels, and objective buffs, a team takes towers to open the map, secures vision to deny counterplay, and ultimately breaks into the base to end the game. Throughout the game, teams manage priority in lanes, macro decisions on which objectives to prioritize, and how to control late game objectives. Each decision, both team level and player level, reflects how small resource leads are turned into structural advantages.
+
+### Keywords & Map Visual
+
+::: {.columns}
+::: {.column width="54%"}
+- **5-vs-5 videogame** — Two coordinated teams of five compete to destroy the enemy Nexus at the center of a mirrored base. The core rules are simple, but strategy emerges from how teams trade space, time, and information to turn small leads into map control.  
+- **One avatar each (champion)** — Every player drafts a unique champion from ~170 options and remains locked to that pick for the match. Each champion’s kit defines strengths, weaknesses, and synergies, so composition and counter-picks shape how advantages can be created.  
+- **The map (Summoner’s Rift)** — Play occurs on three lanes connected by a forested jungle. Minion waves, towers, and neutral monsters structure the economy and movement; taking outer towers opens the map, while jungle paths and terrain enable ambushes and objective setups.  
+- **Roles** — Top and Mid are solo lanes focused on dueling and flank pressure; the Jungler controls neutral camps, ganks lanes, and converts lane priority into early objectives; the Bot carry (ADC) scales as the primary sustained damage source; the Support controls vision, engages or peels, and enables team movement.  
+- **Win path (resources → structures → Nexus)** — Players last-hit minions for gold and experience, buy items, and convert lane pressure into towers, dragons, Herald, and Baron Nashor. These objective wins grant stats, siege power, and tempo, compounding small leads until a team can breach the base and end the game.  
+- **Game phases** — Draft establishes matchups and team identities; Laning emphasizes CS, wave control, trading, and early objective timing; the mid game revolves around rotations, vision, and skirmishes for dragons and Herald; the endgame centers on Baron, inhibitors, and coordinated sieges. Typical matches last 25–40 minutes.  
+:::
+
+::: {.column width="3%"}
+
+:::
+
+::: {.column width="43%"}
+![Typical MOBA map (with labelled lanes) for illustrative purposes. Original PNG version by Raizin, SVG rework by Sameboat (file: Map of MOBA.png, CC BY-SA 3.0).](./resources/league-map.jpg){#fig-map width=100% fig-alt="Summoner’s Rift-style MOBA map with top, mid, bottom lanes and jungle"}
+:::
+
+:::
+
+## Literature review
+
+This paper is not the first to model interactions in video games, especially in League of Legends, using a network structure and variation of the Graph Neural Network. Early work in esports analytics treated cooperation as a networked phenomenon within a single game. Mora-Cantallops & Sicilia (2019) modeled each match as a directed, weighted assist graph with players as nodes and assist-to-kill links as edges. Simple structural summaries such as assist ratio and degree centralization were shown to correlate with swings in team economy. This supported the intuition that coordinated micro play scales into macro advantages but their work did not employ any machine learning techniques to conduct further analysis.
+
+A second stream of work models teams directly and follows them through time. Bisberg & Ferrara (2022) proposed a team only winner prediction graph in which each node represents a team in game, connected temporally to that team’s prior match and laterally to the opponents’ prior matches. A one-layer GCN on this structure outperformed classical ratings and demonstrated that temporal momentum and opponent context can be learned as graph signals. Yet the receptive field is deliberately narrow and blind to the source of advantage as features like lane pressure, jungle tempo, or vision control are all collapsed into a single row per team per game.
+
+Bridging these perspectives requires architectures that reason over typed relations without conflating their semantics. Relational Graph Convolutional Networks (R-GCN; Schlichtkrull et al., 2018) introduce relation specific transformations that scale to sparse heterographs. This innovation is central to this project, where edges encode different meaningswhose contributions should not be forced through a single shared kernel. R-GCN offers the formalism to carry multiple edge types in one model while remaining computationally tractable on large graphs.
+
+Graph Attention Networks (GAT; Veličković et al., 2018) further motivate this project's design by showing how masked self-attention on graphs can assign different weights to neighbors within the same relation and do so efficiently and inductively. Multi-head attention provides both capacity and interpretability as the model can learn to privilege certain neighbors when forming a node’s embedding. The learned coefficients then give a natural window into why a prediction was made. This is especially appealing in League of Legends, where the importance of certain roles like jungler’s performance may outweigh a team’s long run momentum depending on game specific conditions like draft and objective timing.
+
+Taken together, the literature suggests three ingredients that will be combined in this project: (i) micro-level cooperation inside a match is predictive of macro outcomes; (ii) team-level temporal graphs to capture momentum and opponent context better than classical baselines; and (iii) relation-aware layers—convolutional or attentional—are the right abstraction for heterogeneous esports data. The Hybrid Player-in-Game and Team-in-Game Temporal Graph (H-TGN) operationalizes these ideas by unifying player and team nodes in a single heterograph, extracting inflow ego-subgraphs around each match to preserve causality, and applying relation-aware attention that keeps messages separate by edge type before fusing them. This design will hopefully trace how player level signals flow into team level predictions across time while remaining faithful to the competitive structure of professional play.
+
+
+## Limits of Existing Research & Project Objectives
+
+Two modeling traditions dominate the literature. Player centric studies build graphs within a single match, linking players by assists or damage trades to explain how cooperation produces gold leads and ultimately wins. Team centric studies collapse each game to one row of features per side, then model temporal dependencies with rating systems or graph convolution networks. While each strand has merit, they ask different questions and use incompatible inputs. Analysts therefore still lack a principled way to trace how in lane edges feed into match level outcomes.
+
+This paper hypothesizes that a hybrid architecture capturing both intra game player interactions and inter‑game team momentum and strategic edges will outperform single scale baselines in match‑winner prediction and hopefully yield interpretable attributions. Concretely, the model outlined in this paper draws a temporal heterogeneous graph whose nodes are (i) Player‑in‑Game and (ii) Team‑in‑Game. Typed edges encode five relationship classes: teammate synergy, lane opposition, player hot‑streaks, team momentum, and team level opposition metrics. Relational GCN layers learn player embeddings where pooled vectors feed upwards towards a team level GCN that outputs win probability.
+
+## Data Source
+
+The primary dataset for this study was obtained from Oracle’s Elixir, the most comprehensive and widely used public repository of professional League of Legends match statistics. Oracle’s Elixir aggregates official match data provided by Riot Games through the game’s developer API. It then parses the data into a consistent structure and publishes CSV files containing both player level statistics and team level summaries for every competitive match in major leagues. This source is particularly useful because it tracks games from multiple seasons across every competitive league in the world and provides reliably consistent data.
+
+The seasonal coverage for the dataset spans nearly 12 years of competitive match data. However, this project focuses on matches from the Spring Split of 2019 to the Summer Split of 2024, capturing ten competitive splits and providing a balanced mix of regular season and playoff matches. The analysis focuses on two primary regions - the League of Legends Champions Korea league (LCK) and the League of Legends Pro League (LPL) in China. These regions were chosen because they offer complete and consistent statistical coverage for every game and exhibit two distinct strategic identities in the play style of their teams. The two regions both have consistent structures from year to year in this time span. Additionally, these two leagues are widely considered to contain the best quality players and coaches from all available leagues as only teams from these two regions have won the end of year World Championship trophy over the last 10 year period. In total, pulling data from only these regions ensures that the models learned patterns that are not biased toward a single regional play style while also providing consistently formatted data without outlier data that might be exhibited from smaller regions that play fewer games and a low quality.
+
+As mentioned above, each row in the raw dataset corresponds to either the performance of an individual player in a single game, or the performance of a team in a single game. The metrics for player and team data both record a variety of combat, economic, and objective-based statistics and there are some cases of overlap in the data where team data can be recovered as a sum of player statistics. Player combat metrics include individual kills, deaths, assists, damage dealt to opponents per minute, and the player's individual damage lead over their role opponent. Economic performance is tracked through total gold earned, gold differences relative to lane opponents at standard checkpoints (10, 15, and 20 minutes), creep score, and experience differences at the same timestamps. Objective control is quantified through counts of towers destroyed, dragons and barons secured, and Rift Herald captures. Vision-related performance is measured by wards placed, wards destroyed, and overall vision score. Team level features are derived by aggregating player values within each team for a given match, producing totals or averages as appropriate, however as will be discussed below, the majority of metrics were left at the player level as node attributes while the team nodes contained information about the match such as opponent, victory, and the side of the map each team defended in the match.
+
+Before graph construction, the dataset underwent a preprocessing phase designed to ensure consistency and prevent information leakage. Matches that ended in remakes, forfeits, or special formats were excluded, and only official competitive games were retained. Continuous features were normalized to zero mean and unit variance within each split to reduce the effect of seasonal meta shifts and to place different statistics on a comparable scale. Categorical variables such as champion identity, lane role, and side selection, blue or red, were converted  to numeric encodings. The matches were chronologically ordered so that all graph connections respected temporal causality, and the train, validation, and test sets were created by timestamp-based splits rather than random sampling to prevent future matches from influencing past predictions. At the conclusion of preprocessing, the combined dataset contained approximately 71,628 entries across player and team tables, forming the foundation for the multi-stage graph construction process described in the following section.
+
+## The Graph Setup
+
+The Hybrid Player-in-Game and Team-in-Game Temporal  Graph (H-TGN) was built to capture competitive structure at both the micro level of lane matchup and the macro level of team wide trends by combining them into a single heterogeneous network. Graph construction began by generating two parallel and independent graphs, one at the team level and one at the player level, from the cleaned Oracle’s Elixir data. The team level graph contained a node for each team’s appearance in a single match, enriched with attributes such as the side of the map defended, match outcome, and opponent identity. Team-level connections were created through vs edges, which linked opposing teams from the same game and carried match-level metadata, and through next_game edges, which linked each team’s consecutive appearances in chronological order, preserving the temporal progression of competitive play.
+
+In parallel, a player level graph was generated in which each node represented a single player’s performance in a single game. Player nodes retained detailed lane specific metrics like gold and experience differences against their lane opponent, kills, assists, deaths, damage share, and objective participation to ensure that the fine grained dynamics of individual performance were preserved. 
+
+Once these separate structures were constructed, they were merged into a unified heterogeneous graph. Since the final objective of the project was to predict game and match outcomes with only prior information about the match available, team nodes were connected to the player nodes that corresponded to their performance in the previous match that team played. This created a basic subgraph where each game contained two team nodes that were each connected to five player nodes that represented their previous game performance. These Player node to Team node cross connections were built with helper functions that added prev_roster edges between a team node and the players who comprised its roster in the preceding match. These prev_roster edges carried forward player level statistics as edge attributes, enabling the model to incorporate form, consistency, and roster stability into its reasoning. The result was a single large scale network in which team and player nodes were fully integrated and connected by a diverse set of relation types reflecting both within game and cross game contexts.
+
+::: {.columns}
+
+::: {.column width="26%"}
+
+:::
+
+::: {.column width="48%"}
+
+![Ego-network of a single team node (TEAM_suning_2020_63). Blue/red circles are the focal teams; light-blue/gray circles are neighboring team nodes; cyan squares are player nodes; directed edges show temporal and roster links.](./resources/TEAM_suning_2020_63.png){#fig-ego-team width=100% fig-alt="Ego network around TEAM_suning_2020_63 with team and player nodes and directed links"}
+
+:::
+
+::: {.column width="26%"}
+
+:::
+
+:::
+
+From this unified structure, the GAT model’s input sample, as explained in more detail in the following section, were produced by extracting inflow ego subgraphs centered on the vs edges of focal matches. The process began by designating the blue-side team of the focal match as the “center” node and the opposing red-side team as the “opponent” node. From this relationship the vs edge that connects the opponent and center node was reassigned to another edge type called vs_predict. This new edge ultimately contained the match level result that will serve as the prediction target for the entire ego subgraph. A reversed breadth-first search was then performed to collect all nodes within six incoming hops of the center, ensuring that only historical context flowed into the prediction target. This traversal captured each team’s recent competitive history, the recent form of their players, lane matchups from prior games, and any relevant indirect connections such as shared opponents or common roster members. All edges in the extracted subgraph were pruned or reoriented so that information could only propagate forward toward the focal vs edge during message passing. After restructuring, the dataset contained nearly 9,800 inflow sub ego graphs that were split into training, validation, and test splits of 70%, 15%, and 15%.
+
+::: {.columns}
+
+::: {.column width="26%"}
+
+:::
+
+::: {.column width="48%"}
+
+![Example inflow ego-subgraph centered on a focal match. Orange/blue circles denote red/blue side teams; gray squares are players; edge colors indicate relation types (`prev_roster`, `next_game`, `vs`, `vs_predict`).](./resources/ego_subgraph_sample.png){#fig-ego-sub width=100% fig-alt="Inflow ego-subgraph with team nodes (blue/red), player squares (gray), and colored relation edges"}
+
+:::
+
+::: {.column width="26%"}
+
+:::
+
+:::
+
+These ego subgraphs were intended to serve as an effective unit of analysis for a Graph Attention Network because they present a bounded, high information neighborhood tailored to the prediction target. By centering the subgraph on the two teams in the focal match, the GAT is meant to attend over both player level signals, like a mid laner’s gold advantage in recent games, and team level patterns, like a team’s win streak, without being diluted by unnecessary parts of the global graph. The ultimate goal of this setup was to allow the following GAT model to learn when temporal momentum should dominate over lane by lane performance, or when individual player form outweighs team level trends, leading to richer and more context-aware predictions.
+
+
+## Graph Attention Neural Network Model
+
+The predictive architecture for this study is a focal‑node, relationally aware Graph Attention Network designed expressly for the ego‑subgraphs described in the above section. Graph attention mechanisms allow the model to learn not only from the connectivity pattern of the graph but also to assign varying importance to different neighbors within a relation type. In the heterogeneous setting, each edge type has its own learnable transformation and attention parameters, enabling the model to differentiate, for example, between information coming from a teammate edge versus a lane_opponent edge.
+
+### Data interface and labels
+
+Each ego subgraph is converted into a PyG HeteroData object, with inherited methods from the PyTorch Dataset class, with two node types, team and player, and relation tables that mirror the ego subgraph construction pipeline. Team nodes carry structural flags such as node_type_bool, is_blue, dist, is_center, and is_opp. Player nodes retain a richer feature vector combining role one‑hot encoded booleans for each player position, the same structural flags as team nodes for identification, and the 24 numeric performance metrics used to inform that team nodes (kills, assists, damage and vision rates, lane gold/XP/CS differentials at standard checkpoints, and related shares). Edges are encoded with a one‑hot variables over the canonical relation set and an optional blue_win scalar in vs edges that contain match result information. In practice this creates a five‑dimensional edge attribute that distinguishes prev_roster, next_game, vs, and the focal vs_predict channel used for supervision. The match label is derived directly from the vs_predict edge that connects the two teams in the focal game and is stored at the graph level, giving a single binary target per sample.
+
+Because subgraphs are batched, each batch contains multiple games with one designated center team per graph. This setup therefore stores the per‑graph center’s local index on the team node store and convert it to global indices when batching. During the forward pass only those center rows are scored, and labels are aligned to the subset of graphs that have valid centers.
+
+### Architecture
+
+The network begins with a per type projection that maps raw team and player features into a shared hidden space. It then applies a stack of heterogenous attention layers, number of which is left as a model parameter, but with a crucial constraint that only messages that land on team destinations are materialized and only the rows that correspond to the current batch’s center teams are updated. For each layer and for each relation that targets teams nodes specifically the model computes messages with a relation specific GAT Convolution and keeps these messages separate. Rather than summing relations, it concatenates the per relation center messages in a fixed order and applies a learned linear fusion back into the hidden dimension. Other features include a LayerNorm per node type, a ReLU nonlinearity activation functions, and modest feature dropout to stabilize gradient scale.
+
+Attention weights returned by the player to team channel are used to form an interpretable Top‑K player summary. For each center team, the model averages attention across heads, identifies up to K most‑attended source player nodes feeding the center, and concatenates their hidden states in slot order before projecting back to the hidden size. This produces a compact, order‑aware summary of the players the model deemed most influential to the team’s current state. The final classifier concatenates the fused center‑team embedding with this Top‑K player summary and maps the result to logits for win/loss via a shallow MLP with dropout.
+
+### Training procedure
+
+Training follows a standard supervised routine with careful batching and label alignment. Subgraphs are loaded via the default PyG DataLoader. On each step the batch is moved to device, global indices for the per‑graph centers are computed, and the model is called with node dictionaries, relation‑specific edge indices, a dictionary of edge attributes, and the vector of valid center indices. If a batch contains graphs without a valid center they are skipped for that step. The loss is cross‑entropy on the per‑center logits against the per‑graph binary outcome, gradients are clipped to a conservative norm to prevent spikes, and parameters are updated with Adam. The model tracks simple gradient diagnostics like global grad and weight L2 norms alongside accuracy and loss for both training and validation splits. Early stopping on validation loss guards against overfitting and the best checkpoint by validation loss is reloaded for final test evaluation. Throughout training CSV logs are persisted and exported as loss, accuracy, and gradient‑norm curves in order to enable quick inspection of convergence and hyperparameter performance.
+
+  
+## Results
+
+The hybrid GAT was evaluated against the existing baseline approaches of the GCN-WP model of Bisberg and Ferrara (2022), which operates on a team-only graph. The GAT model was trained and tested on the same dataset with a chronological split, ensuring that no future matches influenced the prediction of past games. Validation loss early stopping was employed to select the checkpoint for test evaluation which in this case was the model trained on epoch 2 - the test metrics reported above are computed from that saved model. 
+
+
+::: {.columns}
+
+::: {.column width="26%"}
+
+:::
+
+::: {.column width="48%"}
+
+![Baseline results reported by Bisberg & Ferrara (2022). The best configuration (1-layer Chebyshev GCN with delta features) attains 0.619 test accuracy and serves as our external benchmark.](./resources/gcn_baseline_results.png){#fig-baseline fig-alt="Table of reported baseline accuracies from Bisberg & Ferrara 2022; best 0.619" width=100%}
+
+:::
+
+::: {.column width="26%"}
+
+:::
+
+:::
+
+Training dynamics suggest early overfitting as the training loss declines steadily to roughly 0.61, while validation loss bottoms out early near 0.68 (around epoch 2–3) before drifting upward to approximately 0.74 by the end of training. Training accuracy climbs to about 0.65, whereas validation accuracy oscillates around 0.50–0.56 and finishes near 0.52. These curves, point to the fact that some learning does take place early in the training process but shows that past epoch 2 any gains in training loss were the result of over learning the train set.
+
+::: {.columns}
+
+::: {.column width="48%"}
+
+![Training and validation loss by epoch. Validation loss bottoms early and drifts upward, indicating overfitting.](./resources/final_loss_curve.png){#fig-loss fig-alt="Line plot of train vs validation loss over epochs; validation increases after early minimum" width=100%}
+
+:::
+
+::: {.column width="4%"}
+
+:::
+
+::: {.column width="48%"}
+![Training and validation accuracy by epoch. Training rises toward ~0.65 while validation fluctuates around 0.50–0.56.](./resources/final_acc_curve.png){#fig-acc fig-alt="Line plot of train vs validation accuracy; widening generalization gap" width=100%}
+:::
+
+:::
+
+
+Although, the training process did not reveal gains from deep training, the model did display modest performance in actually making predictions on the test set. On the held out test set the model achieved 52.4% accuracy (771/1,470) with an ROC AUC of 0.560. The test confusion matrix shows the granular predictions made by the model and has 501 true negatives, 270 true positives, 193 false positives, and 506 false negatives, indicating a conservative decision boundary that favors class 0. Precision for the positive class is 0.584 (270/463)(270/463), recall is 0.348 (270/776)(270/776), and the resulting F1 is 0.44. Specificity is 0.722 (501/694)(501/694), giving a balanced accuracy of 0.535. The model predicts the positive class on 31.5% of cases while the true positive rate in the test set is 52.9%, which explains the high false-negative count and the low recall.
+
+::: {.columns}
+
+::: {.column width="48%"}
+
+![Receiver operating characteristic on the test set (AUC = 0.560). The dashed line denotes a random classifier.](./resources/final_test_pred_auc.png){#fig-roc fig-alt="Test ROC curve with AUC 0.560; diagonal random baseline shown" width=100%}
+
+:::
+
+::: {.column width="4%"}
+
+:::
+
+::: {.column width="48%"}
+
+![Test confusion matrix for the hybrid focal-node GAT on LCK/LPL 2020–2024. Counts: TN=501, FP=193, FN=506, TP=270; overall accuracy 52.4% at the default 0.5 threshold.](./resources/final_test_pred_confusion_mat.png){#fig-confmat fig-alt="Confusion matrix with TN 501, FP 193, FN 506, TP 270 for test predictions" width=100%}
+
+:::
+
+:::
+
+In summary, the final pretrained model that was used to make predictions showed better than random performance in making predictions but ultimately failed in the task of out performing the baseline approach of Bisberg and Ferrara (2022). The above graphs, when taken together, indicate that while the architecture learns some signaling from the data, its current configuration under-recovers positive predictions and does not generalize strongly beyond the first few epochs. Some tweaks related to calibrating the decision threshold on the validation set, introducing class-aware loss or focal loss, and reducing capacity or regularizing earlier have the potential to improve model performance but it is likely that significant and fundamental changes to the graph setup and model architecture are required to truly achieve the objectives laid out by the project. These potential sources of error will be discussed further in the following section.
+
+## Discussion
+
+This project achieved several substantive steps forward despite a modest final scoreline. First, it demonstrated that a hybrid, multi scale representation with players and teams coexisting in one temporally consistent heterograph can extract signal above chance from elite LCK/LPL matches. Even at an AUC of about 0.56, the model’s outputs reflect learned regularities rather than noise. Second, the work produced a reusable graph construction pipeline that cleanly separates team and player graphs which are built independently, stitched by explicit cross-scale relations, and standardized into inflow ego-subgraphs that respect causality. That pipeline is portable to other seasons or regions and makes ablations straightforward. Third, the final focal-node GAT introduced contributions that proved practically valuable including the keeping relation messages separate until a learned fusion layer, which makes the model’s computation and interpretation line up with domain semantic. Together, these choices framed a clear end to end pipeline that includes data from micro play to macro outcomes.
+
+At the same time, the model did not outperform the team only baseline of Bisberg & Ferrara (2022), landing at ~52% accuracy and AUC ≈ 0.56 on the held-out test split. The training curves suggest early overfitting and limited rank separation with thresholding at 0.5 the model under-predicts positives and yields low recall. These outcomes trace to specific design decisions that accumulated as the architecture evolved.
+
+Early experiments updated all nodes whereas the final model updates only the center team nodes each layer. While that focuses compute towards the projects core objectives care, it also constrains multi-hop reasoning so that neighbors do not evolve between layers, so information from two or more hops away arrives largely as static features rather than progressively distilled embeddings. This is perhaps the largest structural issue that this project was unable to overcome. Finding a better method to pass information from disparate edges to the center node of a graph is the single greatest source of interest in further work on this subject. In parallel, the design process narrowed the set of relations that can land messages on teams to four channels — player to team prev_roster_rev, next_game, vs, and vs_predict. This means player–player structure (teammate, lane_opponent) never directly contributes updated player embeddings before they influence the team, blunting the value of lane-level interaction edges..
+
+A more fundamental limitation sits in the feature encoding. During standardization, edges were re-encoded to a one-hot relation vector plus a single blue_win slot. This choice greatly simplifies hetero message passing but discards rich numeric attributes that existed on many edges (e.g., lane gold/XP/CS differentials, time deltas, objective context). As a result, relations are distinguished, but the magnitude and direction of advantages along those relations rarely survive to the GAT. Compounding this, the supervised vs_predict edge is allowed to carry a blue_win attribute in its edge_attr. Even if the model did not exploit it in this run, that design creates a latent leakage risk at training time.
+
+There are also graph-level modeling constraints. For roster continuity, teams connect to the previous game’s players; when rosters churn or when the previous opponent’s style differs sharply from the current opponent’s, the mapping between prior player form and the current match’s demands becomes noisy. The strict blue-side as center orientation simplifies supervision but bakes in side-based asymmetries.
+
+In conclusion, there are real and significant benefits to using the hybrid GAT model outlined in this paper but further work remains to ensure the final architecture matches the intended message passing structure and bring the quality of prediction up to par with existing baseline models.
+
+## References
+
+Bisberg, D., & Ferrara, E. (2022). *Semi‑Supervised Graph Convolutional Networks for Winner Prediction in Professional League of Legends*. Proceedings of the IEEE Conference on Games, 1‑8.
+
+Mora‑Cantallops, M., & Sicilia, M‑Á. (2019). *Team Efficiency and Network Structure: The Case of Professional League of Legends*. *Applied Network Science*, 4(1), 1‑15.
+
+Schlichtkrull, M., Kipf, T., Bloem, P., Van Zitnik, M., Welling, M., & Van Steenhoven, B. (2018). *Modeling Relational Data with Graph Convolutional Networks*. *European Semantic Web Conference* (ESWC), 593‑607.
+
+Veličković, P., Cucurull, G., Casanova, A., Romero, A., Liò, P., & Bengio, Y. (2018). *Graph Attention Networks*. *International Conference on Learning Representations* (ICLR). Retrieved from https://openreview.net/forum?id=rJXMpikCZ
+
