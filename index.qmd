@@ -8,9 +8,7 @@ authors:
 format:
   html: 
     embed-resources: True
-    theme: 
-      - mint
-      - darkly
+    theme: mint
     grid:
       sidebar-width: 0px
       body-width: 1200px
